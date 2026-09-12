@@ -29,8 +29,8 @@ cargo build
 cargo test
 ```
 
-The submitted `Cargo.lock` records the exact dependency versions and checksums used by the
-project. Keep it in the repository when submitting the project. If your default toolchain is
+Keep `Cargo.lock` in the repository when submitting the project — it records the exact dependency
+versions and checksums the project was built and tested against. If your default toolchain is
 older than Rust 1.75, prefix Cargo commands with `rustup run 1.75.0`.
 
 ```bash
@@ -182,7 +182,7 @@ curl -s -X POST http://localhost:8080/api/v1/layout/validate \
 ## Journal / decisions & trade-offs
 
 - **Scope:** Prioritized correctness on the two required endpoints; included the optional distance + concurrency features since they came free with the design.
-- **Distance:** Dijkstra already computes it as a side effect of pathfinding. 
+- **Distance:** Dijkstra already computes it as a side effect of pathfinding.
 - **Concurrency:** axum + `RwLock` gives concurrent reads at no extra cost.
 - **Strong connectivity:** Used BFS from one node on the graph + its reverse, instead of BFS from every node. O(V+E) vs O(V·(V+E)). No graph library needed.
 - **Error reporting:** Validation collects all rule violations, not just the first. Each error has a `rule` id + human message.
@@ -191,5 +191,5 @@ curl -s -X POST http://localhost:8080/api/v1/layout/validate \
 - **Distance metric:** Euclidean distance between edge endpoints, summed along the route — a natural fit given the `{x, y}` positions provided.
 - **Directed graph:** The example map's edges are one-directional (`TC -> TL`), so used strong (not weak) connectivity. The "at least two edges" rule counts an edge either way (incoming or outgoing), matching the spec wording and preventing a node with only-incoming or only-outgoing edges from passing as "connected."
 - **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready for routing) so `validate_layout` returns `Result<Graph, Vec<ValidationError>>` — routing never has to re-check invariants that validation already guarantees.
-- **Future improvemnts:** authentication/authorization, persistence beyond process memory (an in-memory "last valid graph" was explicitly what was asked for), and a websocket/streaming variant of the route endpoint.
-- **AI assistance:** I used an AI assistant (Claude) as a partner and coding accelerator. It helped generate the initial boilerplate, draft baseline implementations for the validation and Dijkstra routing logic, and write starting test cases. I reviewed, refined, and tested all generated code against the specifications to ensure correctness, idiomatic Rust structure, and edge-case handling.
+- **Future improvements:** authentication/authorization, persistence beyond process memory (an in-memory "last valid graph" was explicitly what was asked for), and a websocket/streaming variant of the route endpoint.
+- **AI assistance:** Used Claude to scaffold the project and draft initial versions of the validation/routing logic and tests, then reviewed and adapted the output myself.
