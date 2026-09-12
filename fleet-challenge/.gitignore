@@ -1,0 +1,13 @@
+# Rust build output
+/target/
+
+# Local editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Generated archives
+*.zip

@@ -1,0 +1,22 @@
+{
+  "id": "Invalid_missing_endpoint",
+  "nodes": [
+    { "id": "Node_BL", "position": { "x": 0.0, "y": 0.0 } },
+    { "id": "Node_BC", "position": { "x": 18.0, "y": 0.0 } },
+    { "id": "Node_BR", "position": { "x": 25.0, "y": 0.0 } },
+    { "id": "Node_TC", "position": { "x": 10.0, "y": 10.0 } },
+    { "id": "Node_TR", "position": { "x": 25.0, "y": 10.0 } },
+    { "id": "Node_TL", "position": { "x": 0.0, "y": 10.0 } }
+  ],
+  "edges": [
+    { "id": "BL_2_BC", "source": "Node_BL", "sink": "Node_BC" },
+    { "id": "BC_2_BR", "source": "Node_BC", "sink": "Node_BR" },
+    { "id": "BR_2_TR", "source": "Node_BR", "sink": "Node_TR" },
+    { "id": "TR_2_TC", "source": "Node_TR", "sink": "Node_TC" },
+    { "id": "BC_2_TR", "source": "Node_BC", "sink": "" },
+    { "id": "BC_2_TC", "source": "Node_BC", "sink": "Node_TC" },
+    { "id": "TC_2_TL", "source": "Node_TC", "sink": "Node_TL" },
+    { "id": "TL_2_BL", "source": "Node_TL", "sink": "Node_BL" },
+    { "id": "TR_2_BC", "source": "Node_TR", "sink": "Node_BC" }
+  ]
+}
