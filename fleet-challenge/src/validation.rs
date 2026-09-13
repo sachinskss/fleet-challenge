@@ -94,6 +94,7 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
         .iter()
         .map(|n| (n.id.as_str(), 0usize))
         .collect();
+    // Counts edges in either direction (incoming or outgoing)
     for edge in &layout.edges {
         if let Some(d) = degree.get_mut(edge.source.as_str()) {
             *d += 1;
@@ -191,6 +192,7 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
     }
 }
 
+// store nodes reachable from 'start'
 fn bfs_reachable<'a>(
     start: &'a str,
     adjacency: &HashMap<&'a str, Vec<&'a str>>,
@@ -306,7 +308,7 @@ mod tests {
             .push(edge("TR_2_DEADEND", "Node_TR", "Node_DEADEND"));
         layout
             .edges
-            .push(edge("DEADEND_2_TR_DUP", "Node_TR", "Node_DEADEND"));
+            .push(edge("TC_2_DEADEND", "Node_TC", "Node_DEADEND"));
         let result = validate_layout(&layout);
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.rule == "strongly_connected"));

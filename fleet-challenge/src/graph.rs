@@ -1,6 +1,6 @@
 use crate::models::{Edge, EdgeId, Layout, Node, NodeId};
 use std::collections::HashMap;
-
+// Represents a graph consisting of nodes and edges, along with adjacency information and edge weights.
 #[derive(Debug, Clone)]
 pub struct Graph {
     pub nodes: HashMap<NodeId, Node>,
@@ -8,7 +8,6 @@ pub struct Graph {
     pub adjacency: HashMap<NodeId, Vec<EdgeId>>,
     pub edge_weights: HashMap<EdgeId, f64>,
 }
-
 impl Graph {
     pub fn from_layout(layout: &Layout) -> Self {
         let nodes: HashMap<NodeId, Node> = layout
@@ -45,7 +44,6 @@ impl Graph {
                 .expect("Graph::from_layout requires a validated layout")
                 .push(edge.id.clone());
         }
-
         Self {
             nodes,
             edges,

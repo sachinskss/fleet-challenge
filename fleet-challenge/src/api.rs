@@ -18,7 +18,6 @@ struct ValidationResult {
 pub async fn health() -> &'static str {
     "ok"
 }
-
 pub async fn root() -> impl IntoResponse {
     Json(serde_json::json!({
         "service": "fleet-challenge",
@@ -32,6 +31,8 @@ pub async fn root() -> impl IntoResponse {
 }
 
 /// POST /api/v1/layout/validate
+/// example request body:
+/// {   "id": "layout1", "nodes": [...], "edges": [...] }
 pub async fn validate_handler(
     State(state): State<AppState>,
     Json(layout): Json<Layout>,
@@ -57,19 +58,21 @@ pub async fn validate_handler(
         ),
     }
 }
-
+/// Represents a request to plan a route between two nodes in the graph.
 #[derive(Debug, Deserialize)]
 pub struct RouteRequest {
     start: String,
     goal: String,
 }
-
+/// Represents the result of a route planning operation, including the total distance and the sequence of nodes and edges in the path.
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
 }
 
 /// POST /api/v1/route
+/// example request body:
+/// { "start": "node1", "goal": "node2" }
 pub async fn route_handler(
     State(state): State<AppState>,
     Json(req): Json<RouteRequest>,

@@ -96,6 +96,7 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
                 continue; // stale heap entry
             }
         }
+        // Explore outgoing edges from the current node and store the best cost to reach each neighbor.
         if let Some(out_edges) = graph.adjacency.get(&node) {
             for edge_id in out_edges {
                 let edge = &graph.edges[edge_id];
@@ -208,6 +209,7 @@ mod tests {
         let result = plan_route(&valid_graph(), "Node_BR", "Node_BC").unwrap();
         assert_eq!(result.nodes, vec!["Node_BR", "Node_TR", "Node_BC"]);
         assert_eq!(result.edges, vec!["BR_2_TR", "TR_2_BC"]);
+        assert!((result.distance - 22.206555615733702).abs() < 1e-9);
     }
 
     #[test]
@@ -222,6 +224,12 @@ mod tests {
     fn unknown_start_is_rejected() {
         let err = plan_route(&valid_graph(), "Node_GHOST", "Node_BC").unwrap_err();
         assert!(matches!(err, RouteError::UnknownStart(_)));
+    }
+
+    #[test]
+    fn unknown_goal_is_rejected() {
+        let err = plan_route(&valid_graph(), "Node_BC", "Node_GHOST").unwrap_err();
+        assert!(matches!(err, RouteError::UnknownGoal(_)));
     }
 
     #[test]

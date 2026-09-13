@@ -61,6 +61,9 @@ async fn route_respects_edge_direction() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = json(response).await;
-    assert_eq!(body["edges"][0], "BR_2_TR");
-    assert_eq!(body["edges"][1], "TR_2_BC");
+    assert_eq!(
+        body["nodes"],
+        serde_json::json!(["Node_BR", "Node_TR", "Node_BC"])
+    );
+    assert_eq!(body["edges"], serde_json::json!(["BR_2_TR", "TR_2_BC"]));
 }

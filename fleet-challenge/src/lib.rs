@@ -13,7 +13,7 @@ use axum::{
 use state::AppState;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-
+// Sets up the Axum application with routes, middleware, and shared state.
 pub fn app() -> Router {
     Router::new()
         .route("/", get(root))
@@ -24,7 +24,7 @@ pub fn app() -> Router {
         .layer(CorsLayer::permissive())
         .with_state(AppState::new())
 }
-
+// Starts the Axum server, listening on port 8080, and initializes logging and tracing.
 pub async fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -34,6 +34,6 @@ pub async fn run() {
         .init();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    tracing::info!("fleet-challenge listening on http://0.0.0.0:8080");
+    tracing::info!("fleet-challenge listening on http://127.0.0.1:8080");
     axum::serve(listener, app()).await.unwrap();
 }

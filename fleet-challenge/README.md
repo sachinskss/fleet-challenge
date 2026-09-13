@@ -29,13 +29,9 @@ cargo build
 cargo test
 ```
 
-Keep `Cargo.lock` in the repository when submitting the project — it records the exact dependency
-versions and checksums the project was built and tested against. If your default toolchain is
-older than Rust 1.75, prefix Cargo commands with `rustup run 1.75.0`.
-
 ```bash
 cargo run
-# -> fleet-challenge listening on http://0.0.0.0:8080
+# -> fleet-challenge listening on http://127.0.0.1:8080
 ```
 
 Run all tests from the project root (`fleet-challenge/`) — 11 unit tests plus 5 API integration
@@ -52,12 +48,6 @@ cargo test --test validation_api
 cargo test --test routing_api
 ```
 
-Run one test by name:
-
-```bash
-cargo test invalid_layout_does_not_replace_last_valid_layout
-```
-
 The integration tests drive Axum's router in-process via `tower::ServiceExt::oneshot`, so they
 don't require `cargo run` / a live server.
 
@@ -68,14 +58,17 @@ don't require `cargo run` / a live server.
 Body: a layout JSON object (see `test_data/valid_map.json` for the example from the spec).
 
 Response `200 OK` if valid:
+
 ```json
 { "valid": true, "errors": [] }
 ```
+
 On success, the validated layout is converted to and stored as the **last valid graph**, which
 the routing endpoint operates on. Layouts that fail validation are **not** stored — the previous
 last-valid graph (if any) stays in effect.
 
 Response `422 Unprocessable Entity` if invalid:
+
 ```json
 {
   "valid": false,
@@ -93,6 +86,7 @@ Body:
 ```
 
 Response `200 OK`:
+
 ```json
 {
   "nodes": ["Node_BR", "Node_TR", "Node_BC"],
@@ -113,7 +107,7 @@ Trivial liveness check, returns `ok`.
 Basic service info (name, version, endpoint list) — useful for humans and load balancers probing
 the root path.
 
-## Validated rules
+## Validated rules for layouts
 
 - Each edge connects only existing nodes.
 - Each edge is connected on both ends to a node (non-empty `source`/`sink`, plus a `source != sink`
@@ -130,8 +124,9 @@ a Layouter UI can highlight everything at once.
 ## Route planning
 
 Dijkstra's algorithm over the directed graph, with edge weight = Euclidean distance between the
-positions of the two endpoint nodes. This directly gives the requirement "distance of travel along
-the route" almost for free. `start == goal` returns a trivial zero-length route.
+positions of the two endpoint nodes. The Euclidean distance between edge endpoints is used as 
+the edge cost and summed along the selected route. `start == goal` returns a trivial zero-length 
+route.
 
 **Concurrency:** the last-valid-graph is stored behind a `tokio::sync::RwLock`. Route planning
 only takes a read lock, so many `/api/v1/route` requests are served concurrently and only the rare
@@ -168,11 +163,9 @@ available directed edges in the expected order.
 | `invalid_not_strongly_connected.json` | a node only reachable one-way (dead end) |
 | `invalid_duplicate_node_id.json` | two nodes sharing the same id |
 
-Keep these JSON files at exactly `fleet-challenge/test_data/` — the integration tests include them
-at compile time via `include_str!`, so moving, renaming, or deleting a fixture will fail
-`cargo test` at compile time rather than at runtime.
-
+Keep these JSON files at  `fleet-challenge/test_data/` - the integration tests include them
 Try them against a running server, e.g.:
+
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/layout/validate \
   -H 'Content-Type: application/json' \
@@ -181,15 +174,18 @@ curl -s -X POST http://localhost:8080/api/v1/layout/validate \
 
 ## Journal / decisions & trade-offs
 
-- **Scope:** Prioritized correctness on the two required endpoints; included the optional distance + concurrency features since they came free with the design.
+- **Scope:** Prioritized correctness on the two required endpoints and included the distance + concurrency features since they came free with the design.
 - **Distance:** Dijkstra already computes it as a side effect of pathfinding.
-- **Concurrency:** axum + `RwLock` gives concurrent reads at no extra cost.
-- **Strong connectivity:** Used BFS from one node on the graph + its reverse, instead of BFS from every node. O(V+E) vs O(V·(V+E)). No graph library needed.
+- **Concurrency:** axum + RwLock allows multiple route requests to read the current graph concurrently, while layout updates acquire exclusive access.
+- **Strong connectivity:** Used BFS from one node on the graph + its reverse, instead of BFS from every node. O(V+E) vs O(V·(V+E)).
 - **Error reporting:** Validation collects all rule violations, not just the first. Each error has a `rule` id + human message.
-- **Connectivity check skipped when edges reference missing nodes** — avoids noisy, redundant errors on top of a more fundamental problem.
 - **State model:** Only a graph built from a layout that *passes* validation replaces the stored graph. Posting an invalid layout afterwards does not clear or corrupt the previously stored valid graph (verified with both manual and automated tests).
-- **Distance metric:** Euclidean distance between edge endpoints, summed along the route — a natural fit given the `{x, y}` positions provided.
+- **Distance metric:** Euclidean distance between edge endpoints, summed along the route this is a natural fit given the `{x, y}` positions provided.
 - **Directed graph:** The example map's edges are one-directional (`TC -> TL`), so used strong (not weak) connectivity. The "at least two edges" rule counts an edge either way (incoming or outgoing), matching the spec wording and preventing a node with only-incoming or only-outgoing edges from passing as "connected."
-- **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready for routing) so `validate_layout` returns `Result<Graph, Vec<ValidationError>>` — routing never has to re-check invariants that validation already guarantees.
-- **Future improvements:** authentication/authorization, persistence beyond process memory (an in-memory "last valid graph" was explicitly what was asked for), and a websocket/streaming variant of the route endpoint.
-- **AI assistance:** Used Claude to scaffold the project and draft initial versions of the validation/routing logic and tests, then reviewed and adapted the output myself.
+- **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready for routing) so `validate_layout` returns `Result<Graph, Vec<ValidationError>>`: routing never has to re-check invariants that validation already guarantees.
+- **Future improvements:**
+  - Explicit edge costs/travel times rather than deriving distance solely from node coordinates.
+  - More comprehensive API/integration and property-based testing.
+  - Optimized graph/routing strategies for larger layouts, potentially including A*.
+  - Structured validation errors containing affected node/edge IDs.
+- **AI assistance:** I used an AI assistant (Claude) as a partner and coding accelerator. It helped generate the initial boilerplate, draft baseline implementations for the validation and Dijkstra routing logic. I reviewed, refined, and tested all generated code against the specifications to ensure correctness, idiomatic Rust structure, and edge-case handling.
