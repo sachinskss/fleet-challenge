@@ -1,10 +1,9 @@
-use crate::graph::Graph;
-use crate::models::NodeId;
+use crate::graph::{Graph, NodeIndex};
+use crate::models::{EdgeId, NodeId};
+
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
-
-type EdgeId = String;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct RouteResult {
@@ -26,21 +25,24 @@ pub enum RouteError {
     NoRoute(String, String),
 }
 
-#[derive(Clone)]
-struct OutEdge {
-    edge_id: EdgeId,
-    target: String,
-    weight: f64,
+impl RouteError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownStart(_) => "unknown_start_node",
+            Self::UnknownGoal(_) => "unknown_goal_node",
+            Self::NoRoute(_, _) => "no_route",
+        }
+    }
 }
 
 struct HeapItem {
     cost: f64,
-    node: NodeId,
+    node: NodeIndex,
 }
 
 impl PartialEq for HeapItem {
     fn eq(&self, other: &Self) -> bool {
-        self.cost == other.cost
+        self.cost == other.cost && self.node == other.node
     }
 }
 impl Eq for HeapItem {}
@@ -51,6 +53,7 @@ impl Ord for HeapItem {
             .cost
             .partial_cmp(&self.cost)
             .unwrap_or(Ordering::Equal)
+            .then_with(|| self.node.cmp(&other.node))
     }
 }
 impl PartialOrd for HeapItem {
@@ -62,12 +65,12 @@ impl PartialOrd for HeapItem {
 /// Plans the shortest route between two nodes of a validated graph using
 /// Dijkstra's algorithm, respecting edge direction.
 pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult, RouteError> {
-    if !graph.nodes.contains_key(start) {
+    let Some(start_index) = graph.node_index(start) else {
         return Err(RouteError::UnknownStart(start.to_string()));
-    }
-    if !graph.nodes.contains_key(goal) {
+    };
+    let Some(goal_index) = graph.node_index(goal) else {
         return Err(RouteError::UnknownGoal(goal.to_string()));
-    }
+    };
 
     if start == goal {
         return Ok(RouteResult {
@@ -77,18 +80,18 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
         });
     }
 
-    let mut dist: HashMap<NodeId, f64> = HashMap::new();
-    let mut prev: HashMap<NodeId, (NodeId, EdgeId)> = HashMap::new(); // node -> (predecessor, edge used)
+    let mut dist: HashMap<NodeIndex, f64> = HashMap::new();
+    let mut prev: HashMap<NodeIndex, (NodeIndex, usize)> = HashMap::new();
     let mut heap = BinaryHeap::new();
 
-    dist.insert(start.to_string(), 0.0);
+    dist.insert(start_index, 0.0);
     heap.push(HeapItem {
         cost: 0.0,
-        node: start.to_string(),
+        node: start_index,
     });
 
     while let Some(HeapItem { cost, node }) = heap.pop() {
-        if node == goal {
+        if node == goal_index {
             break;
         }
         if let Some(&best) = dist.get(&node) {
@@ -97,49 +100,42 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
             }
         }
         // Explore outgoing edges from the current node and store the best cost to reach each neighbor.
-        if let Some(out_edges) = graph.adjacency.get(&node) {
-            for edge_id in out_edges {
-                let edge = &graph.edges[edge_id];
-                let e = OutEdge {
-                    edge_id: edge.id.clone(),
-                    target: edge.sink.clone(),
-                    weight: graph.edge_weights[edge_id],
-                };
-                let next_cost = cost + e.weight;
-                let is_better = match dist.get(&e.target) {
-                    Some(&d) => next_cost < d,
-                    None => true,
-                };
-                if is_better {
-                    dist.insert(e.target.clone(), next_cost);
-                    prev.insert(e.target.clone(), (node.clone(), e.edge_id.clone()));
-                    heap.push(HeapItem {
-                        cost: next_cost,
-                        node: e.target.clone(),
-                    });
-                }
+        for &edge_index in graph.outgoing_edges(node) {
+            let edge = graph.edge(edge_index);
+            let next_cost = cost + edge.weight;
+            let is_better = match dist.get(&edge.sink) {
+                Some(&d) => next_cost < d,
+                None => true,
+            };
+            if is_better {
+                dist.insert(edge.sink, next_cost);
+                prev.insert(edge.sink, (node, edge_index));
+                heap.push(HeapItem {
+                    cost: next_cost,
+                    node: edge.sink,
+                });
             }
         }
     }
 
-    if !dist.contains_key(goal) {
+    if !dist.contains_key(&goal_index) {
         return Err(RouteError::NoRoute(start.to_string(), goal.to_string()));
     }
 
-    let mut node_path = vec![goal.to_string()];
+    let mut node_path = vec![graph.node_id(goal_index).clone()];
     let mut edge_path: Vec<EdgeId> = Vec::new();
-    let mut current = goal.to_string();
-    while current != start {
-        let (p, edge_id) = prev.get(&current).cloned().expect("path must exist");
-        edge_path.push(edge_id);
-        node_path.push(p.clone());
-        current = p;
+    let mut current = goal_index;
+    while current != start_index {
+        let (parent, edge_index) = prev.get(&current).copied().expect("path must exist");
+        edge_path.push(graph.edge(edge_index).id.clone());
+        node_path.push(graph.node_id(parent).clone());
+        current = parent;
     }
     node_path.reverse();
     edge_path.reverse();
 
     Ok(RouteResult {
-        distance: dist[goal],
+        distance: dist[&goal_index],
         nodes: node_path,
         edges: edge_path,
     })
@@ -234,15 +230,12 @@ mod tests {
 
     #[test]
     fn no_route_when_unreachable() {
-        // Node_BR has only outgoing edge to Node_TR in this layout; there's no
-        // edge back "into" a would-be isolated node, so build one directly.
-        let mut graph = valid_graph();
-        graph
-            .nodes
-            .insert("Node_ISOLATED".into(), node("Node_ISOLATED", 50.0, 50.0));
-        graph.adjacency.insert("Node_ISOLATED".into(), Vec::new());
-        graph.adjacency.get_mut("Node_BL").unwrap().clear();
-        let err = plan_route(&graph, "Node_BL", "Node_ISOLATED").unwrap_err();
+        let mut layout = valid_layout();
+        layout.nodes.push(node("Node_ISOLATED", 50.0, 50.0));
+        layout
+            .edges
+            .push(edge("ISOLATED_LOOP", "Node_ISOLATED", "Node_ISOLATED"));
+        let err = plan_route(&Graph::from_layout(&layout), "Node_BL", "Node_ISOLATED").unwrap_err();
         assert!(matches!(err, RouteError::NoRoute(_, _)));
     }
 }

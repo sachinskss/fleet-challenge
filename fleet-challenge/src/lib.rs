@@ -12,8 +12,11 @@ use axum::{
 };
 use state::AppState;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
-// Sets up the Axum application with routes, middleware, and shared state.
+
+const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
+
 pub fn app() -> Router {
     Router::new()
         .route("/", get(root))
@@ -21,10 +24,12 @@ pub fn app() -> Router {
         .route("/api/v1/layout/validate", post(validate_handler))
         .route("/api/v1/route", post(route_handler))
         .layer(TraceLayer::new_for_http())
+        // Permissive CORS is useful for local development; production should restrict origins.
         .layer(CorsLayer::permissive())
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
         .with_state(AppState::new())
 }
-// Starts the Axum server, listening on port 8080, and initializes logging and tracing.
+
 pub async fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -33,7 +38,12 @@ pub async fn run() {
         )
         .init();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    tracing::info!("fleet-challenge listening on http://127.0.0.1:8080");
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8080);
+    let bind_address = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
+    tracing::info!("fleet-challenge listening on http://127.0.0.1:{port}");
     axum::serve(listener, app()).await.unwrap();
 }

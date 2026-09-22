@@ -1,0 +1,33 @@
+{
+    // VS Code launch configuration for Rust (CodeLLDB)
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Server (cargo run)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=fleet-challenge"
+                ]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug API Integration Tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--test=validation_api",
+                    "--no-run"
+                ]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

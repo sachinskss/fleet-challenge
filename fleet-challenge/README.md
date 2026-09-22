@@ -34,8 +34,9 @@ cargo run
 # -> fleet-challenge listening on http://127.0.0.1:8080
 ```
 
-Run all tests from the project root (`fleet-challenge/`) — 11 unit tests plus 5 API integration
-tests:
+The server listens on port `8080` by default; set `PORT` to override it. Request bodies are limited to 1 MiB.
+
+Run all tests from the project root (`fleet-challenge/`) — domain unit tests plus API integration tests:
 
 ```bash
 cargo test
@@ -71,12 +72,19 @@ Response `422 Unprocessable Entity` if invalid:
 
 ```json
 {
-  "valid": false,
-  "errors": [
-    { "rule": "edge_references_existing_node", "message": "Edge 'TR_2_GHOST' references unknown sink node 'Node_GHOST'" }
-  ]
+  "error": {
+    "code": "invalid_layout",
+    "message": "layout validation failed",
+    "details": {
+      "violations": [
+        { "rule": "edge_references_existing_node", "message": "Edge 'TR_2_GHOST' references unknown sink node 'Node_GHOST'" }
+      ]
+    }
+  }
 }
 ```
+
+Malformed JSON returns `400 Bad Request` with error code `malformed_json`.
 
 ### `POST /api/v1/route`
 
@@ -95,8 +103,11 @@ Response `200 OK`:
 }
 ```
 
-Response `404 Not Found` if `start`/`goal` don't exist in the current layout, or no route
-exists between them. Response `409 Conflict` if no layout has passed validation yet.
+Response `404 Not Found` with error code `unknown_start_node` or `unknown_goal_node` if an
+endpoint does not exist. Response `422 Unprocessable Entity` with error code `no_route` if both
+endpoints exist but no directed route connects them. Response `503 Service Unavailable` with
+error code `no_valid_layout` if no layout has passed validation yet. Application errors use this
+envelope: `{ "error": { "code": "unknown_start_node", "message": "..." } }`.
 
 ### `GET /health`
 
@@ -123,7 +134,7 @@ a Layouter UI can highlight everything at once.
 
 ## Route planning
 
-Dijkstra's algorithm over the directed graph, with edge weight = Euclidean distance between the
+Dijkstra's algorithm over the directed graph, selecting the minimum summed Euclidean distance between the
 positions of the two endpoint nodes. The Euclidean distance between edge endpoints is used as 
 the edge cost and summed along the selected route. `start == goal` returns a trivial zero-length 
 route.
@@ -163,8 +174,8 @@ available directed edges in the expected order.
 | `invalid_not_strongly_connected.json` | a node only reachable one-way (dead end) |
 | `invalid_duplicate_node_id.json` | two nodes sharing the same id |
 
-Keep these JSON files at  `fleet-challenge/test_data/` - the integration tests include them
-Try them against a running server, e.g.:
+Keep these JSON files at `fleet-challenge/test_data/`; the integration tests include them.
+Try them against a running server, for example:
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/layout/validate \
@@ -172,20 +183,98 @@ curl -s -X POST http://localhost:8080/api/v1/layout/validate \
   -d @test_data/invalid_not_strongly_connected.json
 ```
 
-## Journal / decisions & trade-offs
+## Decisions & trade-offs
 
 - **Scope:** Prioritized correctness on the two required endpoints and included the distance + concurrency features since they came free with the design.
-- **Distance:** Dijkstra already computes it as a side effect of pathfinding.
+- **Distance:** Dijkstra selects the minimum summed Euclidean distance. This is an explicit choice
+  because the wire format does not provide edge costs; production routing would normally use a
+  declared travel-time or distance field instead.
 - **Concurrency:** axum + RwLock allows multiple route requests to read the current graph concurrently, while layout updates acquire exclusive access.
 - **Strong connectivity:** Used BFS from one node on the graph + its reverse, instead of BFS from every node. O(V+E) vs O(V·(V+E)).
 - **Error reporting:** Validation collects all rule violations, not just the first. Each error has a `rule` id + human message.
 - **State model:** Only a graph built from a layout that *passes* validation replaces the stored graph. Posting an invalid layout afterwards does not clear or corrupt the previously stored valid graph (verified with both manual and automated tests).
-- **Distance metric:** Euclidean distance between edge endpoints, summed along the route this is a natural fit given the `{x, y}` positions provided.
 - **Directed graph:** The example map's edges are one-directional (`TC -> TL`), so used strong (not weak) connectivity. The "at least two edges" rule counts an edge either way (incoming or outgoing), matching the spec wording and preventing a node with only-incoming or only-outgoing edges from passing as "connected."
-- **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready for routing) so `validate_layout` returns `Result<Graph, Vec<ValidationError>>`: routing never has to re-check invariants that validation already guarantees.
+- **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready
+  for routing). The graph keeps a string-to-index lookup for API IDs, contiguous node and edge
+  storage, adjacency lists of integer edge indexes, and each edge's precomputed weight. Routing
+  never has to re-check invariants that validation already guarantees.
 - **Future improvements:**
   - Explicit edge costs/travel times rather than deriving distance solely from node coordinates.
   - More comprehensive API/integration and property-based testing.
   - Optimized graph/routing strategies for larger layouts, potentially including A*.
   - Structured validation errors containing affected node/edge IDs.
 - **AI assistance:** I used an AI assistant (Claude) as a partner and coding accelerator. It helped generate the initial boilerplate, draft baseline implementations for the validation and Dijkstra routing logic. I reviewed, refined, and tested all generated code against the specifications to ensure correctness, idiomatic Rust structure, and edge-case handling.
+
+## Journal
+
+This section records the important implementation steps and decisions made while reviewing the
+Fleet Challenge against a higher engineering bar.
+
+### Implementation Steps
+
+| Step | Change | Reason |
+|---|---|---|
+| 1 | Defined the wire-format models for layouts, nodes, positions, and directed edges. | Keep JSON input separate from the runtime graph representation. |
+| 2 | Added complete layout validation with accumulated rule violations. | Return all actionable problems in one response instead of failing at the first error. |
+| 3 | Added strong-connectivity validation using the graph and its transpose. | Check reachability in both directions in `O(V + E)`. |
+| 4 | Built a graph only after validation succeeds. | Prevent invalid layouts from entering routing state. |
+| 5 | Added weighted directed route planning with Dijkstra's algorithm. | Select the minimum-cost route when distance is required. |
+| 6 | Stored only the last valid graph behind an async read/write lock. | Permit concurrent route reads while serializing layout replacement. |
+| 7 | Added structured API errors and explicit HTTP status semantics. | Give clients stable machine-readable codes and distinguish failure types. |
+| 8 | Added request limits, configurable port handling, and documented CORS scope. | Address basic deployment and abuse-resistance concerns. |
+| 9 | Expanded unit and integration tests around invalid input and state transitions. | Test behavior at both the domain and HTTP boundaries. |
+
+### Algorithm Decisions
+
+| Area | Decision | Rationale and trade-off |
+|---|---|---|
+| Route planning | Dijkstra over directed edges | Edge weights are non-negative Euclidean distances. BFS would only minimize hop count; A* was not necessary for the expected graph size. |
+| Edge cost | Euclidean distance between endpoint coordinates | The input provides coordinates but no explicit edge cost. This is a documented assumption, not a claim that coordinates always represent real travel distance. |
+| Connectivity | BFS from one node in the original graph and its transpose | Strong connectivity can be checked in `O(V + E)` without running a traversal from every node or using an `O(V^3)` Floyd-Warshall pass. |
+| Route reconstruction | Predecessor node and edge indexes | Preserves both the node path and the exact edge IDs returned to the client. |
+| Tie handling | Stable index-based heap ordering | Makes equal-cost route selection deterministic for repeatable tests and responses. |
+
+### Data-Structure Decisions
+
+| Structure | Purpose | Why it was chosen |
+|---|---|---|
+| `HashMap<NodeId, NodeIndex>` | Resolve external node IDs | Provides average `O(1)` lookup while allowing compact internal indexes. |
+| `Vec<Node>` | Store node records | Contiguous storage reduces overhead and improves locality during routing. |
+| `Vec<GraphEdge>` | Store edge ID, endpoints, and weight | Keeps edge identity and precomputed cost together. |
+| `Vec<Vec<EdgeIndex>>` | Store outgoing adjacency | Avoids duplicated node/weight data and preserves the exact traversed edge. |
+| `HashMap<NodeIndex, f64>` | Store tentative Dijkstra distances | Keeps the implementation sparse; only discovered nodes need distance entries. |
+| `RwLock<Option<Graph>>` | Store the last valid graph | Multiple routes can read concurrently, while validation replaces the graph atomically. |
+
+### API Decisions
+
+| Situation | Status | Error code or response | Decision |
+|---|---:|---|---|
+| Valid layout | `200` | `{ "valid": true, "errors": [] }` | Store the resulting graph as the last valid layout. |
+| Invalid layout | `422` | `invalid_layout` with validation details | JSON is valid, but domain rules are not satisfied. |
+| Malformed JSON | `400` | `malformed_json` | Reject invalid JSON before domain processing. |
+| Oversized request | `413` | Framework limit response | Bound memory and processing costs before deserialization. |
+| Unknown start or goal | `404` | `unknown_start_node` / `unknown_goal_node` | The requested endpoint does not exist in the current graph. |
+| No route between existing nodes | `422` | `no_route` | Both resources exist, but the requested operation cannot be satisfied. |
+| No validated graph loaded | `503` | `no_valid_layout` | The service is not ready to route because no usable state exists. |
+| API error body | Varies | `{ "error": { "code", "message", "details" } }` | Keep machine-readable codes separate from human-readable messages. |
+| CORS | N/A | Permissive in development | Explicitly documented for local development; production should restrict origins. |
+
+### Test Matrix
+
+| Area | Cases covered |
+|---|---|
+| Validation success | Provided valid map is accepted and converted into a graph. |
+| Validation identity rules | Duplicate node IDs and duplicate edge IDs. |
+| Validation edge rules | Missing endpoints, unknown node references, and self-loops. |
+| Validation graph rules | Minimum incident degree and failed strong connectivity. |
+| Validation robustness | Non-finite coordinates and multiple simultaneous violations. |
+| Routing success | Direct route, multi-hop route, weighted shortest route, and `start == goal`. |
+| Routing failures | Unknown start, unknown goal, and unreachable destination. |
+| API success | Valid layout submission and route planning through the real Axum router. |
+| API state | Invalid layout does not replace the previous valid graph; routing before validation is rejected. |
+| API errors | Malformed layout JSON, malformed route JSON, and unknown-node responses. |
+| API directionality | Route planning follows directed edges rather than treating the graph as undirected. |
+
+The remaining higher-confidence follow-ups would be property-based graph testing, explicit
+concurrency tests, and a domain-defined edge cost such as travel time rather than inferred
+Euclidean distance.

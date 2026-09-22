@@ -1,18 +1,58 @@
 use crate::models::Layout;
-use crate::routing::plan_route;
+use crate::routing::{plan_route, RouteError};
 use crate::state::AppState;
 use crate::validation::validate_layout;
 use axum::{
-    extract::State,
+    extract::{rejection::JsonRejection, State},
     http::StatusCode,
     response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 struct ValidationResult {
     valid: bool,
     errors: Vec<crate::validation::ValidationError>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiError {
+    code: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    error: ApiError,
+}
+
+fn error_response(
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+) -> axum::response::Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: ApiError {
+                code,
+                message,
+                details: None,
+            },
+        }),
+    )
+        .into_response()
+}
+
+fn json_error(rejection: JsonRejection) -> axum::response::Response {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "malformed_json",
+        rejection.body_text(),
+    )
 }
 
 pub async fn health() -> &'static str {
@@ -35,8 +75,13 @@ pub async fn root() -> impl IntoResponse {
 /// {   "id": "layout1", "nodes": [...], "edges": [...] }
 pub async fn validate_handler(
     State(state): State<AppState>,
-    Json(layout): Json<Layout>,
+    payload: Result<Json<Layout>, JsonRejection>,
 ) -> impl IntoResponse {
+    let Json(layout) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_error(rejection),
+    };
+
     match validate_layout(&layout) {
         Ok(graph) => {
             let mut guard = state.last_valid_graph.write().await;
@@ -48,14 +93,19 @@ pub async fn validate_handler(
                     errors: Vec::new(),
                 }),
             )
+                .into_response()
         }
         Err(errors) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ValidationResult {
-                valid: false,
-                errors,
+            Json(ErrorResponse {
+                error: ApiError {
+                    code: "invalid_layout",
+                    message: "layout validation failed".into(),
+                    details: Some(serde_json::json!({ "violations": errors })),
+                },
             }),
-        ),
+        )
+            .into_response(),
     }
 }
 /// Represents a request to plan a route between two nodes in the graph.
@@ -64,42 +114,39 @@ pub struct RouteRequest {
     start: String,
     goal: String,
 }
-/// Represents the result of a route planning operation, including the total distance and the sequence of nodes and edges in the path.
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
 /// POST /api/v1/route
 /// example request body:
 /// { "start": "node1", "goal": "node2" }
 pub async fn route_handler(
     State(state): State<AppState>,
-    Json(req): Json<RouteRequest>,
+    payload: Result<Json<RouteRequest>, JsonRejection>,
 ) -> impl IntoResponse {
+    let Json(req) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_error(rejection),
+    };
+
     let guard = state.last_valid_graph.read().await;
     let graph = match guard.as_ref() {
         Some(graph) => graph,
         None => {
-            return (
-                StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    error: "no valid layout has been submitted to /api/v1/layout/validate yet"
-                        .to_string(),
-                }),
-            )
-                .into_response();
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no_valid_layout",
+                "no valid layout has been submitted to /api/v1/layout/validate yet".into(),
+            );
         }
     };
 
     match plan_route(graph, &req.start, &req.goal) {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-        Err(err) => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: err.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(err @ (RouteError::UnknownStart(_) | RouteError::UnknownGoal(_))) => {
+            error_response(StatusCode::NOT_FOUND, err.code(), err.to_string())
+        }
+        Err(err @ RouteError::NoRoute(_, _)) => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            err.code(),
+            err.to_string(),
+        ),
     }
 }

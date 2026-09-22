@@ -1,5 +1,5 @@
 use crate::graph::Graph;
-use crate::models::Layout;
+use crate::models::{EdgeId, Layout, NodeId};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -23,12 +23,27 @@ pub struct ValidationError {
 /// 6. Every node is reachable from every other node (the layout is strongly connected),
 ///    treating edges as directed driveways.
 pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
+    validate_rules(layout)?;
+    Ok(Graph::from_layout(layout))
+}
+
+pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
-    // --- Rule: unique node ids -------------------------------------------------
-    let mut node_ids: HashSet<&str> = HashSet::new();
+    // --- Rule: node positions must produce finite route weights ---------------
     for node in &layout.nodes {
-        if !node_ids.insert(node.id.as_str()) {
+        if !node.position.x.is_finite() || !node.position.y.is_finite() {
+            errors.push(ValidationError {
+                rule: "finite_node_position".into(),
+                message: format!("Node '{}' has a non-finite position", node.id),
+            });
+        }
+    }
+
+    // --- Rule: unique node ids -------------------------------------------------
+    let mut node_ids: HashSet<NodeId> = HashSet::new();
+    for node in &layout.nodes {
+        if !node_ids.insert(node.id.clone()) {
             errors.push(ValidationError {
                 rule: "unique_node_id".into(),
                 message: format!("Duplicate node id '{}'", node.id),
@@ -37,9 +52,9 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
     }
 
     // --- Rule: unique edge ids ---------------------------------------------------
-    let mut edge_ids: HashSet<&str> = HashSet::new();
+    let mut edge_ids: HashSet<EdgeId> = HashSet::new();
     for edge in &layout.edges {
-        if !edge_ids.insert(edge.id.as_str()) {
+        if !edge_ids.insert(edge.id.clone()) {
             errors.push(ValidationError {
                 rule: "unique_edge_id".into(),
                 message: format!("Duplicate edge id '{}'", edge.id),
@@ -57,9 +72,8 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
                     edge.id
                 ),
             });
-            continue;
         }
-        if !node_ids.contains(edge.source.as_str()) {
+        if !node_ids.contains(&edge.source) {
             errors.push(ValidationError {
                 rule: "edge_references_existing_node".into(),
                 message: format!(
@@ -68,7 +82,7 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
                 ),
             });
         }
-        if !node_ids.contains(edge.sink.as_str()) {
+        if !node_ids.contains(&edge.sink) {
             errors.push(ValidationError {
                 rule: "edge_references_existing_node".into(),
                 message: format!(
@@ -89,22 +103,19 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
     }
 
     // --- Rule: every node has at least two edges attached -----------------------
-    let mut degree: HashMap<&str, usize> = layout
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), 0usize))
-        .collect();
+    let mut degree: HashMap<&NodeId, usize> =
+        layout.nodes.iter().map(|n| (&n.id, 0usize)).collect();
     // Counts edges in either direction (incoming or outgoing)
     for edge in &layout.edges {
-        if let Some(d) = degree.get_mut(edge.source.as_str()) {
+        if let Some(d) = degree.get_mut(&edge.source) {
             *d += 1;
         }
-        if let Some(d) = degree.get_mut(edge.sink.as_str()) {
+        if let Some(d) = degree.get_mut(&edge.sink) {
             *d += 1;
         }
     }
     for node in &layout.nodes {
-        let d = degree.get(node.id.as_str()).copied().unwrap_or(0);
+        let d = degree.get(&node.id).copied().unwrap_or(0);
         if d < 2 {
             errors.push(ValidationError {
                 rule: "min_two_edges".into(),
@@ -124,22 +135,22 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
         .any(|e| e.rule == "edge_references_existing_node" || e.rule == "edge_endpoints_present");
 
     if !has_dangling_refs && !layout.nodes.is_empty() {
-        let node_id_list: Vec<&str> = layout.nodes.iter().map(|n| n.id.as_str()).collect();
+        let node_id_list: Vec<&NodeId> = layout.nodes.iter().map(|n| &n.id).collect();
 
-        let mut forward_adj: HashMap<&str, Vec<&str>> =
+        let mut forward_adj: HashMap<&NodeId, Vec<&NodeId>> =
             node_id_list.iter().map(|&id| (id, Vec::new())).collect();
-        let mut backward_adj: HashMap<&str, Vec<&str>> =
+        let mut backward_adj: HashMap<&NodeId, Vec<&NodeId>> =
             node_id_list.iter().map(|&id| (id, Vec::new())).collect();
 
         for edge in &layout.edges {
             forward_adj
-                .get_mut(edge.source.as_str())
-                .unwrap()
-                .push(edge.sink.as_str());
+                .get_mut(&edge.source)
+                .expect("node id was inserted into adjacency map above")
+                .push(&edge.sink);
             backward_adj
-                .get_mut(edge.sink.as_str())
-                .unwrap()
-                .push(edge.source.as_str());
+                .get_mut(&edge.sink)
+                .expect("node id was inserted into adjacency map above")
+                .push(&edge.source);
         }
 
         // A directed graph is strongly connected iff a BFS from any single node
@@ -150,12 +161,12 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
         let forward_reachable = bfs_reachable(start, &forward_adj);
         let backward_reachable = bfs_reachable(start, &backward_adj);
 
-        let mut unreachable_from_start: Vec<&str> = node_id_list
+        let mut unreachable_from_start: Vec<&NodeId> = node_id_list
             .iter()
             .filter(|id| !forward_reachable.contains(*id))
             .copied()
             .collect();
-        let mut cannot_reach_start: Vec<&str> = node_id_list
+        let mut cannot_reach_start: Vec<&NodeId> = node_id_list
             .iter()
             .filter(|id| !backward_reachable.contains(*id))
             .copied()
@@ -167,7 +178,11 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
                 rule: "strongly_connected".into(),
                 message: format!(
                     "Node(s) [{}] are not reachable from node '{}'",
-                    unreachable_from_start.join(", "),
+                    unreachable_from_start
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     start
                 ),
             });
@@ -178,7 +193,11 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
                 rule: "strongly_connected".into(),
                 message: format!(
                     "Node(s) [{}] cannot reach node '{}'",
-                    cannot_reach_start.join(", "),
+                    cannot_reach_start
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     start
                 ),
             });
@@ -186,7 +205,7 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
     }
 
     if errors.is_empty() {
-        Ok(Graph::from_layout(layout))
+        Ok(())
     } else {
         Err(errors)
     }
@@ -194,9 +213,9 @@ pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
 
 // store nodes reachable from 'start'
 fn bfs_reachable<'a>(
-    start: &'a str,
-    adjacency: &HashMap<&'a str, Vec<&'a str>>,
-) -> HashSet<&'a str> {
+    start: &'a NodeId,
+    adjacency: &HashMap<&'a NodeId, Vec<&'a NodeId>>,
+) -> HashSet<&'a NodeId> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     visited.insert(start);
@@ -321,5 +340,46 @@ mod tests {
         let result = validate_layout(&layout);
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.rule == "unique_node_id"));
+    }
+
+    #[test]
+    fn rejects_duplicate_edge_ids() {
+        let mut layout = valid_layout();
+        layout.edges.push(edge("BL_2_BC", "Node_BC", "Node_BR"));
+        let errors = validate_layout(&layout).unwrap_err();
+        assert!(errors.iter().any(|e| e.rule == "unique_edge_id"));
+    }
+
+    #[test]
+    fn rejects_self_loops() {
+        let mut layout = valid_layout();
+        layout.edges.push(edge("self_loop", "Node_BC", "Node_BC"));
+        let errors = validate_layout(&layout).unwrap_err();
+        assert!(errors.iter().any(|e| e.rule == "edge_no_self_loop"));
+    }
+
+    #[test]
+    fn rejects_non_finite_node_positions() {
+        let mut layout = valid_layout();
+        layout.nodes[0].position.x = f64::NAN;
+        let errors = validate_layout(&layout).unwrap_err();
+        assert!(errors.iter().any(|e| e.rule == "finite_node_position"));
+    }
+
+    #[test]
+    fn reports_multiple_independent_violations() {
+        let mut layout = valid_layout();
+        layout.nodes.push(node("Node_BL", 1.0, 1.0));
+        layout.edges.push(edge("duplicate", "Node_BC", ""));
+        layout
+            .edges
+            .push(edge("duplicate", "Node_BC", "Node_GHOST"));
+        let errors = validate_layout(&layout).unwrap_err();
+        assert!(errors.iter().any(|e| e.rule == "unique_node_id"));
+        assert!(errors.iter().any(|e| e.rule == "unique_edge_id"));
+        assert!(errors.iter().any(|e| e.rule == "edge_endpoints_present"));
+        assert!(errors
+            .iter()
+            .any(|e| e.rule == "edge_references_existing_node"));
     }
 }

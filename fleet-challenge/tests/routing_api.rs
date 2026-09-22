@@ -67,3 +67,41 @@ async fn route_respects_edge_direction() {
     );
     assert_eq!(body["edges"], serde_json::json!(["BR_2_TR", "TR_2_BC"]));
 }
+
+#[tokio::test]
+async fn route_before_valid_layout_returns_service_unavailable() {
+    let response = post(
+        app(),
+        "/api/v1/route",
+        r#"{"start":"Node_BR","goal":"Node_BC"}"#,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json(response).await;
+    assert_eq!(body["error"]["code"], "no_valid_layout");
+}
+
+#[tokio::test]
+async fn unknown_node_returns_not_found_with_error_code() {
+    let app = submit_valid_layout().await;
+    let response = post(
+        app,
+        "/api/v1/route",
+        r#"{"start":"Node_GHOST","goal":"Node_BC"}"#,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body["error"]["code"], "unknown_start_node");
+}
+
+#[tokio::test]
+async fn malformed_route_json_returns_structured_bad_request() {
+    let response = post(app(), "/api/v1/route", "{not-json").await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json(response).await;
+    assert_eq!(body["error"]["code"], "malformed_json");
+}
