@@ -122,13 +122,14 @@ the root path.
 ## Validated rules for layouts
 
 - Each edge connects only existing nodes.
-- Each edge is connected on both ends to a node (non-empty `source`/`sink`, plus a `source != sink`
-  sanity check — a driveway looping back to the same intersection isn't a useful edge).
+- Each edge is connected on both ends to a node (non-empty `source`/`sink`).
 - Each node has at least two edges connected to it (counting both directions).
 - Each node is reachable from any other node. Edges are directed (the sample map's arrows point
   one way), so this means the layout's graph must be **strongly connected**.
 - As a bonus, node ids and edge ids are each checked for uniqueness — the spec doesn't call this
   out explicitly, but a duplicate id would make edge references ambiguous.
+
+Self-loops are not rejected because they are not part of the specified validation contract.
 
 Validation always returns the **complete** list of problems it finds (not just the first one), so
 a Layouter UI can highlight everything at once.
@@ -277,16 +278,16 @@ Fleet Challenge against a higher engineering bar.
 |---|---|
 | Validation success | Provided valid map is accepted and converted into a graph. |
 | Validation identity rules | Duplicate node IDs and duplicate edge IDs. |
-| Validation edge rules | Missing endpoints, unknown node references, and self-loops. |
+| Validation edge rules | Missing source, missing sink, and unknown node references. |
 | Validation graph rules | Minimum incident degree and failed strong connectivity. |
-| Validation robustness | Non-finite coordinates and multiple simultaneous violations. |
-| Routing success | Direct route, multi-hop route, weighted shortest route, and `start == goal`. |
+| Validation robustness | Multiple simultaneous violations. |
+| Routing success | Direct route, multi-hop route, weighted shortest route, deterministic equal-cost route selection, and `start == goal`. |
 | Routing failures | Unknown start, unknown goal, and unreachable destination. |
 | API success | Valid layout submission and route planning through the real Axum router. |
-| API state | Invalid layout does not replace the previous valid graph; routing before validation is rejected. |
+| API state | Invalid layout does not replace the previous valid graph; routing before and after validation is covered. |
 | API errors | Malformed layout JSON, malformed route JSON, and unknown-node responses. |
 | API directionality | Route planning follows directed edges rather than treating the graph as undirected. |
 
 The remaining higher-confidence follow-ups would be property-based graph testing, explicit
-concurrency tests, and a domain-defined edge cost such as travel time rather than inferred
+load or stress testing, and a domain-defined edge cost such as travel time rather than inferred
 Euclidean distance.

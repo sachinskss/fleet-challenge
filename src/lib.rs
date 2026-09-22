@@ -30,7 +30,7 @@ pub fn app() -> Router {
         .with_state(AppState::new())
 }
 
-pub async fn run() {
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -43,7 +43,8 @@ pub async fn run() {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let bind_address = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
     tracing::info!("fleet-challenge listening on http://127.0.0.1:{port}");
-    axum::serve(listener, app()).await.unwrap();
+    axum::serve(listener, app()).await?;
+    Ok(())
 }

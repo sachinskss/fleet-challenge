@@ -24,21 +24,11 @@ pub struct ValidationError {
 ///    treating edges as directed driveways.
 pub fn validate_layout(layout: &Layout) -> Result<Graph, Vec<ValidationError>> {
     validate_rules(layout)?;
-    Ok(Graph::from_layout(layout))
+    Ok(Graph::from_validated_layout(layout))
 }
 
 pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
-
-    // --- Rule: node positions must produce finite route weights ---------------
-    for node in &layout.nodes {
-        if !node.position.x.is_finite() || !node.position.y.is_finite() {
-            errors.push(ValidationError {
-                rule: "finite_node_position".into(),
-                message: format!("Node '{}' has a non-finite position", node.id),
-            });
-        }
-    }
 
     // --- Rule: unique node ids -------------------------------------------------
     let mut node_ids: HashSet<NodeId> = HashSet::new();
@@ -50,6 +40,13 @@ pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
             });
         }
     }
+
+    let node_indices: HashMap<&str, usize> = layout
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id.as_str(), index))
+        .collect();
 
     // --- Rule: unique edge ids ---------------------------------------------------
     let mut edge_ids: HashSet<EdgeId> = HashSet::new();
@@ -73,7 +70,7 @@ pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
                 ),
             });
         }
-        if !node_ids.contains(&edge.source) {
+        if !node_indices.contains_key(edge.source.as_str()) {
             errors.push(ValidationError {
                 rule: "edge_references_existing_node".into(),
                 message: format!(
@@ -82,7 +79,7 @@ pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
                 ),
             });
         }
-        if !node_ids.contains(&edge.sink) {
+        if !node_indices.contains_key(edge.sink.as_str()) {
             errors.push(ValidationError {
                 rule: "edge_references_existing_node".into(),
                 message: format!(
@@ -91,31 +88,21 @@ pub fn validate_rules(layout: &Layout) -> Result<(), Vec<ValidationError>> {
                 ),
             });
         }
-        if edge.source == edge.sink {
-            errors.push(ValidationError {
-                rule: "edge_no_self_loop".into(),
-                message: format!(
-                    "Edge '{}' connects node '{}' to itself, which is not a valid driveway",
-                    edge.id, edge.source
-                ),
-            });
-        }
     }
 
     // --- Rule: every node has at least two edges attached -----------------------
-    let mut degree: HashMap<&NodeId, usize> =
-        layout.nodes.iter().map(|n| (&n.id, 0usize)).collect();
+    let mut degree = vec![0usize; layout.nodes.len()];
     // Counts edges in either direction (incoming or outgoing)
     for edge in &layout.edges {
-        if let Some(d) = degree.get_mut(&edge.source) {
-            *d += 1;
+        if let Some(&index) = node_indices.get(edge.source.as_str()) {
+            degree[index] += 1;
         }
-        if let Some(d) = degree.get_mut(&edge.sink) {
-            *d += 1;
+        if let Some(&index) = node_indices.get(edge.sink.as_str()) {
+            degree[index] += 1;
         }
     }
-    for node in &layout.nodes {
-        let d = degree.get(&node.id).copied().unwrap_or(0);
+    for (index, node) in layout.nodes.iter().enumerate() {
+        let d = degree[index];
         if d < 2 {
             errors.push(ValidationError {
                 rule: "min_two_edges".into(),
@@ -306,6 +293,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_edge_missing_source() {
+        let mut layout = valid_layout();
+        layout.edges.push(edge("dangling", "", "Node_BC"));
+        let result = validate_layout(&layout);
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.rule == "edge_endpoints_present"));
+    }
+
+    #[test]
     fn rejects_node_with_fewer_than_two_edges() {
         let mut layout = valid_layout();
         layout.nodes.push(node("Node_ISOLATED", 5.0, 5.0));
@@ -348,22 +344,6 @@ mod tests {
         layout.edges.push(edge("BL_2_BC", "Node_BC", "Node_BR"));
         let errors = validate_layout(&layout).unwrap_err();
         assert!(errors.iter().any(|e| e.rule == "unique_edge_id"));
-    }
-
-    #[test]
-    fn rejects_self_loops() {
-        let mut layout = valid_layout();
-        layout.edges.push(edge("self_loop", "Node_BC", "Node_BC"));
-        let errors = validate_layout(&layout).unwrap_err();
-        assert!(errors.iter().any(|e| e.rule == "edge_no_self_loop"));
-    }
-
-    #[test]
-    fn rejects_non_finite_node_positions() {
-        let mut layout = valid_layout();
-        layout.nodes[0].position.x = f64::NAN;
-        let errors = validate_layout(&layout).unwrap_err();
-        assert!(errors.iter().any(|e| e.rule == "finite_node_position"));
     }
 
     #[test]

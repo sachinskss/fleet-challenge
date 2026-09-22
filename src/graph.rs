@@ -21,7 +21,7 @@ pub struct GraphEdge {
 }
 
 impl Graph {
-    pub(crate) fn from_layout(layout: &Layout) -> Self {
+    pub(crate) fn from_validated_layout(layout: &Layout) -> Self {
         let nodes = layout.nodes.clone();
         let node_indices = nodes
             .iter()
@@ -59,6 +59,10 @@ impl Graph {
 
     pub(crate) fn node_index(&self, id: &str) -> Option<NodeIndex> {
         self.node_indices.get(id).copied()
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
     pub(crate) fn node_id(&self, index: NodeIndex) -> &NodeId {

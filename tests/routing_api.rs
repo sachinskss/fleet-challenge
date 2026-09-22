@@ -98,6 +98,21 @@ async fn unknown_node_returns_not_found_with_error_code() {
 }
 
 #[tokio::test]
+async fn unknown_goal_returns_not_found_with_error_code() {
+    let app = submit_valid_layout().await;
+    let response = post(
+        app,
+        "/api/v1/route",
+        r#"{"start":"Node_BC","goal":"Node_GHOST"}"#,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body["error"]["code"], "unknown_goal_node");
+}
+
+#[tokio::test]
 async fn malformed_route_json_returns_structured_bad_request() {
     let response = post(app(), "/api/v1/route", "{not-json").await;
 

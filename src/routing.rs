@@ -1,9 +1,9 @@
-use crate::graph::{Graph, NodeIndex};
+use crate::graph::{EdgeIndex, Graph, NodeIndex};
 use crate::models::{EdgeId, NodeId};
 
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct RouteResult {
@@ -51,8 +51,7 @@ impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
         other
             .cost
-            .partial_cmp(&self.cost)
-            .unwrap_or(Ordering::Equal)
+            .total_cmp(&self.cost)
             .then_with(|| self.node.cmp(&other.node))
     }
 }
@@ -80,11 +79,11 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
         });
     }
 
-    let mut dist: HashMap<NodeIndex, f64> = HashMap::new();
-    let mut prev: HashMap<NodeIndex, (NodeIndex, usize)> = HashMap::new();
+    let mut distances = vec![f64::INFINITY; graph.node_count()];
+    let mut previous: Vec<Option<(NodeIndex, EdgeIndex)>> = vec![None; graph.node_count()];
     let mut heap = BinaryHeap::new();
 
-    dist.insert(start_index, 0.0);
+    distances[start_index] = 0.0;
     heap.push(HeapItem {
         cost: 0.0,
         node: start_index,
@@ -94,22 +93,16 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
         if node == goal_index {
             break;
         }
-        if let Some(&best) = dist.get(&node) {
-            if cost > best {
-                continue; // stale heap entry
-            }
+        if cost > distances[node] {
+            continue; // stale heap entry
         }
         // Explore outgoing edges from the current node and store the best cost to reach each neighbor.
         for &edge_index in graph.outgoing_edges(node) {
             let edge = graph.edge(edge_index);
             let next_cost = cost + edge.weight;
-            let is_better = match dist.get(&edge.sink) {
-                Some(&d) => next_cost < d,
-                None => true,
-            };
-            if is_better {
-                dist.insert(edge.sink, next_cost);
-                prev.insert(edge.sink, (node, edge_index));
+            if next_cost < distances[edge.sink] {
+                distances[edge.sink] = next_cost;
+                previous[edge.sink] = Some((node, edge_index));
                 heap.push(HeapItem {
                     cost: next_cost,
                     node: edge.sink,
@@ -118,7 +111,7 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
         }
     }
 
-    if !dist.contains_key(&goal_index) {
+    if distances[goal_index].is_infinite() {
         return Err(RouteError::NoRoute(start.to_string(), goal.to_string()));
     }
 
@@ -126,7 +119,9 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
     let mut edge_path: Vec<EdgeId> = Vec::new();
     let mut current = goal_index;
     while current != start_index {
-        let (parent, edge_index) = prev.get(&current).copied().expect("path must exist");
+        let Some((parent, edge_index)) = previous[current] else {
+            return Err(RouteError::NoRoute(start.to_string(), goal.to_string()));
+        };
         edge_path.push(graph.edge(edge_index).id.clone());
         node_path.push(graph.node_id(parent).clone());
         current = parent;
@@ -135,7 +130,7 @@ pub fn plan_route(graph: &Graph, start: &str, goal: &str) -> Result<RouteResult,
     edge_path.reverse();
 
     Ok(RouteResult {
-        distance: dist[&goal_index],
+        distance: distances[goal_index],
         nodes: node_path,
         edges: edge_path,
     })
@@ -209,6 +204,35 @@ mod tests {
     }
 
     #[test]
+    fn chooses_an_equal_cost_route_deterministically() {
+        let layout = Layout {
+            id: "Equal_cost_map".into(),
+            nodes: vec![
+                node("Node_A", 0.0, 0.0),
+                node("Node_B", 1.0, 0.0),
+                node("Node_C", 0.0, 1.0),
+                node("Node_D", 1.0, 1.0),
+            ],
+            edges: vec![
+                edge("A_2_B", "Node_A", "Node_B"),
+                edge("B_2_D", "Node_B", "Node_D"),
+                edge("A_2_C", "Node_A", "Node_C"),
+                edge("C_2_D", "Node_C", "Node_D"),
+                edge("B_2_A", "Node_B", "Node_A"),
+                edge("D_2_B", "Node_D", "Node_B"),
+                edge("C_2_A", "Node_C", "Node_A"),
+                edge("D_2_C", "Node_D", "Node_C"),
+            ],
+        };
+        let graph = validate_layout(&layout).unwrap();
+        let result = plan_route(&graph, "Node_A", "Node_D").unwrap();
+
+        assert_eq!(result.nodes, vec!["Node_A", "Node_C", "Node_D"]);
+        assert_eq!(result.edges, vec!["A_2_C", "C_2_D"]);
+        assert_eq!(result.distance, 2.0);
+    }
+
+    #[test]
     fn same_start_and_goal_is_trivial_route() {
         let result = plan_route(&valid_graph(), "Node_BC", "Node_BC").unwrap();
         assert_eq!(result.nodes, vec!["Node_BC"]);
@@ -235,7 +259,12 @@ mod tests {
         layout
             .edges
             .push(edge("ISOLATED_LOOP", "Node_ISOLATED", "Node_ISOLATED"));
-        let err = plan_route(&Graph::from_layout(&layout), "Node_BL", "Node_ISOLATED").unwrap_err();
+        let err = plan_route(
+            &Graph::from_validated_layout(&layout),
+            "Node_BL",
+            "Node_ISOLATED",
+        )
+        .unwrap_err();
         assert!(matches!(err, RouteError::NoRoute(_, _)));
     }
 }

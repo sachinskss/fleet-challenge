@@ -1,4 +1,7 @@
 #[tokio::main]
 async fn main() {
-    fleet_challenge::run().await;
+    if let Err(error) = fleet_challenge::run().await {
+        eprintln!("server failed: {error}");
+        std::process::exit(1);
+    }
 }
