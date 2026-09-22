@@ -1,0 +1,32 @@
+# Rust build output
+/target/
+*.o
+*.obj
+*.rlib
+*.rmeta
+*.d
+*.a
+*.so
+*.dylib
+*.dll
+*.pdb
+
+# Leftover nested build/editor directory after repository flattening
+/fleet-challenge/
+
+# Local editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.log
+.env
+.env.*
+!.env.example
+
+# Generated archives
+*.zip

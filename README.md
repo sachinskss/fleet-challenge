@@ -47,6 +47,7 @@ Run only the API integration tests:
 ```bash
 cargo test --test validation_api
 cargo test --test routing_api
+cargo test --test concurrency_api
 ```
 
 The integration tests drive Axum's router in-process via `tower::ServiceExt::oneshot`, so they
@@ -156,10 +157,25 @@ cover:
 - validation followed by route planning returns the expected node and edge sequence
 - an invalid layout does not replace the previously stored valid graph
 - routing follows the directed edge sequence
+- five concurrency scenarios covering concurrent writers, readers, state replacement, and first-load races
 
 Because accepted layouts must be strongly connected, a valid API graph can't demonstrate an
 unreachable reverse route. The directionality test instead verifies that Dijkstra chooses the
 available directed edges in the expected order.
+
+### Concurrency verification
+
+The dedicated `tests/concurrency_api.rs` suite verifies the shared `AppState` and `RwLock` under
+concurrent access. It covers:
+
+1. Twenty identical valid layout submissions completing successfully.
+2. Two distinct valid layouts racing, with exactly one complete graph winning last-write-wins.
+3. An invalid layout racing with a valid layout without replacing valid state.
+4. Concurrent route readers during a validation write without observing partial state.
+5. A route request racing the first validation and seeing only the valid `503` or `200` outcome.
+
+Verified against the project: the build is clean, the concurrency suite passes all 5 tests, five
+repeated runs remain stable, and the existing 25 tests continue to pass.
 
 ## Test data
 
@@ -174,7 +190,7 @@ available directed edges in the expected order.
 | `invalid_not_strongly_connected.json` | a node only reachable one-way (dead end) |
 | `invalid_duplicate_node_id.json` | two nodes sharing the same id |
 
-Keep these JSON files at `fleet-challenge/test_data/`; the integration tests include them.
+Keep these JSON files at `test_data/`; the integration tests include them.
 Try them against a running server, for example:
 
 ```bash

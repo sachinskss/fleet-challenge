@@ -28,3 +28,4 @@ pub async fn json(response: Response) -> Value {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&body).unwrap()
 }
+
