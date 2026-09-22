@@ -199,17 +199,13 @@ curl -s -X POST http://localhost:8080/api/v1/layout/validate \
   -d @test_data/invalid_not_strongly_connected.json
 ```
 
-## Decisions & trade-offs
+## Additional context
+
+The detailed implementation record and algorithm rationale are in the **Engineering Journal**
+below. The remaining project-level notes are kept here so the two sections have distinct roles:
 
 - **Scope:** Prioritized correctness on the two required endpoints and included the distance + concurrency features since they came free with the design.
-- **Distance:** Dijkstra selects the minimum summed Euclidean distance. This is an explicit choice
-  because the wire format does not provide edge costs; production routing would normally use a
-  declared travel-time or distance field instead.
-- **Concurrency:** axum + RwLock allows multiple route requests to read the current graph concurrently, while layout updates acquire exclusive access.
-- **Strong connectivity:** Used BFS from one node on the graph + its reverse, instead of BFS from every node. O(V+E) vs O(V·(V+E)).
-- **Error reporting:** Validation collects all rule violations, not just the first. Each error has a `rule` id + human message.
 - **State model:** Only a graph built from a layout that *passes* validation replaces the stored graph. Posting an invalid layout afterwards does not clear or corrupt the previously stored valid graph (verified with both manual and automated tests).
-- **Directed graph:** The example map's edges are one-directional (`TC -> TL`), so used strong (not weak) connectivity. The "at least two edges" rule counts an edge either way (incoming or outgoing), matching the spec wording and preventing a node with only-incoming or only-outgoing edges from passing as "connected."
 - **Architecture:** Split the raw `Layout` (wire format) from a validated `Graph` (indexed, ready
   for routing). The graph keeps a string-to-index lookup for API IDs, contiguous node and edge
   storage, adjacency lists of integer edge indexes, and each edge's precomputed weight. Routing
